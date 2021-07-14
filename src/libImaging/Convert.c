@@ -1386,27 +1386,27 @@ topalette(
 
                 for (x = 0; x < imIn->xsize; x++, in += 4) {
                     int d2;
-                    INT16 *cache;
+                    INT16 cache;
 
                     r = CLIP8(in[0] + (r + e[3 + 0]) / 16);
                     g = CLIP8(in[1] + (g + e[3 + 1]) / 16);
                     b = CLIP8(in[2] + (b + e[3 + 2]) / 16);
 
                     /* get closest colour */
-                    cache = &ImagingPaletteCache(palette, r, g, b);
-                    if (cache[0] == 0x100) {
+                    cache = ImagingPaletteCacheGet(palette, r, g, b);
+                    if (cache == 0x100) {
                         ImagingPaletteCacheUpdate(palette, r, g, b);
                     }
                     if (alpha) {
-                        out[x * 4] = out[x * 4 + 1] = out[x * 4 + 2] = (UINT8)cache[0];
+                        out[x * 4] = out[x * 4 + 1] = out[x * 4 + 2] = (UINT8)cache;
                         out[x * 4 + 3] = 255;
                     } else {
-                        out[x] = (UINT8)cache[0];
+                        out[x] = (UINT8)cache;
                     }
 
-                    r -= (int)palette->palette[cache[0] * 4];
-                    g -= (int)palette->palette[cache[0] * 4 + 1];
-                    b -= (int)palette->palette[cache[0] * 4 + 2];
+                    r -= (int)palette->palette[cache * 4];
+                    g -= (int)palette->palette[cache * 4 + 1];
+                    b -= (int)palette->palette[cache * 4 + 2];
 
                     /* propagate errors (don't ask ;-) */
                     r2 = r;
@@ -1453,22 +1453,22 @@ topalette(
                 UINT8 *out = alpha ? (UINT8 *)imOut->image32[y] : imOut->image8[y];
 
                 for (x = 0; x < imIn->xsize; x++, in += 4) {
-                    INT16 *cache;
+                    INT16 cache;
 
                     r = in[0];
                     g = in[1];
                     b = in[2];
 
                     /* get closest colour */
-                    cache = &ImagingPaletteCache(palette, r, g, b);
-                    if (cache[0] == 0x100) {
+                    cache = ImagingPaletteCache(palette, r, g, b);
+                    if (cache == 0x100) {
                         ImagingPaletteCacheUpdate(palette, r, g, b);
                     }
                     if (alpha) {
-                        out[x * 4] = out[x * 4 + 1] = out[x * 4 + 2] = (UINT8)cache[0];
+                        out[x * 4] = out[x * 4 + 1] = out[x * 4 + 2] = (UINT8)cache;
                         out[x * 4 + 3] = 255;
                     } else {
-                        out[x] = (UINT8)cache[0];
+                        out[x] = (UINT8)cache;
                     }
                 }
             }

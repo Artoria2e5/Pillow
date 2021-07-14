@@ -137,6 +137,19 @@ struct ImagingHistogramInstance {
     long *histogram; /* Histogram (bands*256 longs) */
 };
 
+#define IMAGING_PALETTE_CACHE_NONE 0
+#define IMAGING_PALETTE_CACHE_ONE 1
+#define IMAGING_PALETTE_CACHE_MANY 2
+
+/* A cache entry. Totally a waste of space. */
+typedef struct ImagingPaletteCacheEntry {
+    INT8 type;
+    union {
+        INT8 index;
+        INT8 *indices;  /* I will regret doing small allocations */
+    } data;
+} ImagingPaletteCacheEntry;
+
 struct ImagingPaletteInstance {
     /* Format */
     char mode[IMAGING_MODE_LENGTH]; /* Band names */
@@ -145,7 +158,7 @@ struct ImagingPaletteInstance {
     int size;
     UINT8 palette[1024]; /* Palette data (same format as image data) */
 
-    INT16 *cache;   /* Palette cache (used for predefined palettes) */
+    ImagingPaletteCacheEntry *cache;   /* Palette cache (used for predefined palettes) */
     int keep_cache; /* This palette will be reused; keep cache */
 };
 
@@ -218,6 +231,8 @@ extern void
 ImagingPaletteCacheUpdate(ImagingPalette palette, int r, int g, int b);
 extern void
 ImagingPaletteCacheDelete(ImagingPalette palette);
+extern INT8
+ImagingPaletteCacheGet(ImagingPalette palette, int r, int g, int b);
 
 #define ImagingPaletteCache(p, r, g, b) \
     p->cache[(r >> 2) + (g >> 2) * 64 + (b >> 2) * 64 * 64]

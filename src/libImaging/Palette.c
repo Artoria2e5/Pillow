@@ -20,6 +20,13 @@
 
 #include <math.h>
 
+/* Summon the alloca demon. */
+#ifdef _WIN32
+#define alloca _alloca
+#else
+#include <alloca.h>
+#endif
+
 ImagingPalette
 ImagingPaletteNew(const char *mode) {
     /* Create a palette object */
@@ -147,8 +154,8 @@ ImagingPaletteDelete(ImagingPalette palette) {
 #define BSTEP (4 * BSCALE)
 
 #define BOX 8
-
 #define BOXVOLUME BOX *BOX *BOX
+#define BOX_INTERIOR_DIST (4 * 4 * 3)
 
 void
 ImagingPaletteCacheUpdate(ImagingPalette palette, int r, int g, int b) {
@@ -157,8 +164,10 @@ ImagingPaletteCacheUpdate(ImagingPalette palette, int r, int g, int b) {
     int r0, g0, b0;
     int r1, g1, b1;
     int rc, gc, bc;
-    unsigned int d[BOXVOLUME];
-    UINT8 c[BOXVOLUME];
+    unsigned int d[BOXVOLUME];       /* best distance for each cell. */
+    UINT16 c[BOXVOLUME];             /* best cache entries */
+    UINT8 *c_x[BOXVOLUME] = {NULL};  /* temporary values stored in an alloca. */
+    int ci = 0;                      /* index to c_extra */
 
     /* Get box boundaries for the given (r,g,b)-triplet.  Each box
        covers eight cache slots (32 colour values, that is). */
@@ -237,7 +246,22 @@ ImagingPaletteCacheUpdate(ImagingPalette palette, int r, int g, int b) {
                     bd = gd;
                     bx = bi;
                     for (b = 0; b < BOX; b++) {
-                        if ((unsigned int)bd < d[j]) {
+                        if (bd < BOX_INTERIOR_DIST) {
+                            /* Smaller than a box. Split it into multiple vals. */
+                            d[j] = bd;     /* Might be wrong. Shouldn't matter. */
+                            c[j] = 0x200;  /* For marking. */
+
+                            /* First element is an index/size counter. */
+                            /* Worst case we ask for 65 * BOXVOLUME bytes... 32K stack. */
+                            if (c_x[j] == NULL) {
+                                size_t alloca_size = sizeof(UINT16) * (64 + 1);
+                                c_x[j] = (UINT16 *)alloca(alloca_size);
+                                memset(c_x[j], 0, alloca_size);
+                            }
+
+                            /* I need to wash my hands. */
+                            c_x[j][c_x[j][0] += 1] = i;
+                        } else if ((unsigned int)bd < d[j]) {
                             d[j] = bd;
                             c[j] = (UINT8)i;
                         }
@@ -263,7 +287,30 @@ ImagingPaletteCacheUpdate(ImagingPalette palette, int r, int g, int b) {
     for (r = r0; r < r1; r += 4) {
         for (g = g0; g < g1; g += 4) {
             for (b = b0; b < b1; b += 4) {
-                ImagingPaletteCache(palette, r, g, b) = c[j++];
+                ImagingPaletteCacheEntry *e = &(ImagingPaletteCache(palette, r, g, b));
+
+                if (e->type == IMAGING_PALETTE_CACHE_MANY) {
+                    free(e->data.indices);
+                    e->type == IMAGING_PALETTE_CACHE_NONE;
+                }
+
+                if (c[j] != 0x200) {
+                    e->type = IMAGING_PALETTE_CACHE_ONE;
+                    e->data.index = c[j];
+                } else {
+                    e->type == IMAGING_PALETTE_CACHE_MANY;
+                    e->data.indices = malloc((c_x[j][0] + 1) * sizeof(INT8));
+                    if (!e->data.indices) {
+                        /* Uhhhhhhhh */
+                        (void)ImagingError_MemoryError();
+                        return;
+                    }
+
+                    /* TODO: sort by dist to middle -- might speed up lin search */
+                    memcpy(e->data.indices, c_x[j], (c_x[j][0] + 1) * sizeof(INT8));
+                }
+
+                j++;
             }
         }
     }
@@ -277,11 +324,12 @@ ImagingPaletteCachePrepare(ImagingPalette palette) {
     int entries = 64 * 64 * 64;
 
     if (palette->cache == NULL) {
-        /* The cache is 512k.  It might be a good idea to break it
+        /* The cache is 1~2M.  It might be a good idea to break it
            up into a pointer array (e.g. an 8-bit image?) */
 
         /* malloc check ok, small constant allocation */
-        palette->cache = (INT16 *)malloc(entries * sizeof(INT16));
+        palette->cache = (ImagingPaletteCacheEntry *)
+            malloc(entries * sizeof(ImagingPaletteCacheEntry));
         if (!palette->cache) {
             (void)ImagingError_MemoryError();
             return -1;
@@ -289,7 +337,7 @@ ImagingPaletteCachePrepare(ImagingPalette palette) {
 
         /* Mark all entries as empty */
         for (i = 0; i < entries; i++) {
-            palette->cache[i] = 0x100;
+            palette->cache[i].type = IMAGING_PALETTE_CACHE_NONE;
         }
     }
 
@@ -301,7 +349,56 @@ ImagingPaletteCacheDelete(ImagingPalette palette) {
     /* Release the colour cache, if any */
 
     if (palette && palette->cache) {
+        int entries = 64 * 64 * 64;
+        /* oh no. need to release all the small allocations... */
+        for (i = 0; i < entries; i++) {
+            if (palette->cache[i].type == IMAGING_PALETTE_CACHE_MANY) {
+                free(palette->cache[i].data.indices);
+            }
+        }
         free(palette->cache);
         palette->cache = NULL;
+    }
+}
+
+INT16
+ImagingPaletteCacheGet(ImagingPalette palette, int r, int g, int b) {
+    ImagingPaletteCacheEntry entry = ImagingPaletteCache(palette, r, g, b);
+    switch (entry.type) {
+        case IMAGING_PALETTE_CACHE_ONE:
+            return entry.data.index;
+        case IMAGING_PALETTE_CACHE_MANY: {
+            /* Linear search, I think. */
+            unsigned int dmin = ~0;
+            unsigned int cmin = 0x100;
+            size_t imin = 1;
+            /* First entry is the length. */
+            size_t n_entries = entry.data.indices[0];
+            int rp, gp, bp;
+            for (int i = 1; i <= n_entries; i++) {
+                int entry_i = entry.data.indices[i];
+                rp = palette->palette[entry_i * 4 + 0];
+                gp = palette->palette[entry_i * 4 + 1];
+                bp = palette->palette[entry_i * 4 + 2];
+
+                unsigned int d = RDIST(r, rp) + GDIST(g, gp) + BDIST(b, bp);
+                if (d < dmin) {
+                    dmin = d;
+                    cmin = entry_i;
+                    imin = i;
+                }
+            }
+
+            /* do a quick swap-to-front -- might speed stuff up? */
+            if (imin != 1) {
+                int t = entry.data.indices[imin];
+                entry.data.indices[imin] = entry.data.indices[imin - 1];
+                entry.data.indices[imin - 1] = t;
+            }
+            return cmin;
+        }
+        default:
+            /* uhhhhh we need an invalid val */
+            return 0x100;
     }
 }
